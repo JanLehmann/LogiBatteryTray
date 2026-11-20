@@ -165,15 +165,14 @@ public static class BatteryHistoryTracker
             {
                 state.PeakChargingMv = Math.Max(state.PeakChargingMv ?? smoothedMv, smoothedMv);
                 int peakMv = state.PeakChargingMv.Value;
-                bool inCvTaper = peakMv >= 4310 && smoothedMv <= peakMv - 8;
+                bool inCvTaper = peakMv >= 4273 && smoothedMv <= peakMv - 6;
 
                 if (inCvTaper)
                 {
-                    // Constant-Voltage (CV) taper phase (~82% -> 99%):
-                    // As charging current tapers off, terminal voltage drops from peak (~4329 mV) down toward ~4190 mV.
-                    int dropSpan = Math.Max(60, peakMv - 4190);
-                    double cvProgress = Math.Clamp((double)(peakMv - smoothedMv) / dropSpan, 0.0, 1.0);
-                    candidate = (int)Math.Round(82 + cvProgress * 17);
+                    // Official Logitech <charging><descending> CV-topping curve (87% -> 99%):
+                    // As charging current tapers off, terminal voltage drops from peak down toward 4208 mV.
+                    LastRawPercentByDevice[key] = HidppBatteryReader.DescendingVoltageToPercent(rawMillivolts);
+                    candidate = HidppBatteryReader.DescendingVoltageToPercent(smoothedMv);
                 }
                 else
                 {
@@ -705,7 +704,7 @@ public static class BatteryHistoryTracker
 
     internal sealed class DeviceCalibrationState
     {
-        public int FullRestingMillivolts { get; set; } = 4186;
+        public int FullRestingMillivolts { get; set; } = 4102;
         public int? LastDisplayedPercent { get; set; }
         public ChargingStatus LastChargingStatus { get; set; } = ChargingStatus.Unknown;
         public int? LastMillivolts { get; set; }

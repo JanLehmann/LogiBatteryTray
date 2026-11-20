@@ -20,41 +20,80 @@ internal static class HidppBatteryReader
 
     private const string BleHidServiceToken = "{00001812-0000-1000-8000-00805f9b34fb}";
 
-    // Standard Logitech LiPo discharge curve (mV -> %) used with HID++ feature 0x1F20.
+    // Official Logitech PRO X Wireless (046D:0ABA) discharge curve from LGHUB pro_x_wireless_headset_battery.xml
+    // (1271.4 mAh total capacity, 4102 mV = 100% down to 3293 mV = 0%).
     private static readonly (int Millivolts, int Percent)[] DischargingVoltageCurve =
     [
-        (4186, 100),
-        (4067, 90),
-        (3989, 80),
-        (3922, 70),
-        (3859, 60),
-        (3811, 50),
-        (3778, 40),
-        (3751, 30),
-        (3717, 20),
-        (3671, 10),
-        (3646, 5),
-        (3579, 2),
-        (3500, 0)
+        (4102, 100),
+        (4046, 95),
+        (3993, 90),
+        (3950, 85),
+        (3916, 80),
+        (3877, 75),
+        (3838, 70),
+        (3809, 65),
+        (3789, 60),
+        (3772, 55),
+        (3759, 50),
+        (3747, 45),
+        (3736, 40),
+        (3722, 35),
+        (3707, 30),
+        (3687, 25),
+        (3661, 20),
+        (3644, 15),
+        (3550, 10),
+        (3426, 5),
+        (3348, 2),
+        (3293, 0)
     ];
 
-    // While charging in Constant-Current (CC) phase (0% -> ~82%), terminal voltage rises up to ~4330 mV
-    // (~280-300 mV above resting cell voltage). Above ~82%, the charger enters Constant-Voltage (CV) taper,
-    // where current decreases and terminal voltage drops from ~4330 mV back down toward ~4190 mV.
-    private static readonly (int Millivolts, int Percent)[] ChargingVoltageCurve =
+    // Official Logitech PRO X Wireless <charging><ascending> curve (CC phase, 0% -> 87%)
+    // from LGHUB pro_x_wireless_headset_battery.xml, extended to 4330 mV for cell internal resistance aging.
+    private static readonly (int Millivolts, int Percent)[] ChargingAscendingVoltageCurve =
     [
-        (4330, 82),
-        (4295, 76),
-        (4245, 70),
-        (4185, 62),
-        (4141, 60),
-        (4080, 50),
-        (4005, 38),
-        (3940, 28),
-        (3870, 18),
-        (3790, 10),
-        (3700, 2),
-        (3600, 0)
+        (4330, 87),
+        (4275, 87),
+        (4261, 85),
+        (4236, 82),
+        (4222, 80),
+        (4193, 75),
+        (4164, 70),
+        (4139, 65),
+        (4117, 60),
+        (4097, 55),
+        (4078, 50),
+        (4062, 45),
+        (4049, 40),
+        (4038, 35),
+        (4029, 30),
+        (4018, 25),
+        (4001, 20),
+        (3973, 15),
+        (3940, 10),
+        (3895, 5),
+        (3749, 2),
+        (3444, 0)
+    ];
+
+    // Official Logitech PRO X Wireless <charging><descending> curve (CV topping phase, 87% -> 100%)
+    // from LGHUB pro_x_wireless_headset_battery.xml: as current tapers off, voltage drops from peak down to 4208 mV.
+    internal static readonly (int Millivolts, int Percent)[] ChargingDescendingVoltageCurve =
+    [
+        (4273, 87),
+        (4264, 88),
+        (4262, 89),
+        (4257, 90),
+        (4249, 91),
+        (4243, 92),
+        (4241, 93),
+        (4234, 94),
+        (4232, 95),
+        (4225, 96),
+        (4219, 97),
+        (4218, 98),
+        (4211, 99),
+        (4208, 99)
     ];
 
     private static readonly ConcurrentDictionary<string, byte> BleUnifiedBatteryCache =
@@ -614,7 +653,7 @@ internal static class HidppBatteryReader
 
     private static int VoltageToPercent(int millivolts, bool isCharging)
     {
-        (int Millivolts, int Percent)[] curve = isCharging ? ChargingVoltageCurve : DischargingVoltageCurve;
+        (int Millivolts, int Percent)[] curve = isCharging ? ChargingAscendingVoltageCurve : DischargingVoltageCurve;
         if (millivolts >= curve[0].Millivolts)
         {
             return curve[0].Percent;
@@ -632,6 +671,28 @@ internal static class HidppBatteryReader
         }
 
         return 0;
+    }
+
+    internal static int DescendingVoltageToPercent(int millivolts)
+    {
+        (int Millivolts, int Percent)[] curve = ChargingDescendingVoltageCurve;
+        if (millivolts >= curve[0].Millivolts)
+        {
+            return curve[0].Percent;
+        }
+
+        for (int i = 0; i < curve.Length - 1; i++)
+        {
+            (int highMv, int lowPct) = curve[i];
+            (int lowMv, int highPct) = curve[i + 1];
+            if (millivolts >= lowMv)
+            {
+                double fraction = (double)(highMv - millivolts) / Math.Max(1, highMv - lowMv);
+                return Math.Clamp((int)Math.Round(lowPct + fraction * (highPct - lowPct)), 87, 99);
+            }
+        }
+
+        return 99;
     }
 
     private static byte[]? SendAndReceive(
