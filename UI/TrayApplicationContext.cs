@@ -426,6 +426,7 @@ public sealed class TrayApplicationContext : ApplicationContext
         alertItem.Click += (_, _) => SetLowBatteryAlert(!_settings.LowBatteryAlertEnabled);
         _contextMenu.Items.Add(alertItem);
 
+        _contextMenu.Items.Add("Akku-Log öffnen (CSV)", null, (_, _) => OpenBatteryLog());
         _contextMenu.Items.Add("Taskleisten-Einstellungen öffnen", null, (_, _) => OpenTaskbarSettings());
         _contextMenu.Items.Add(new ToolStripSeparator());
         _contextMenu.Items.Add("Beenden", null, (_, _) => ExitThread());
@@ -466,6 +467,22 @@ public sealed class TrayApplicationContext : ApplicationContext
         _settings.LowBatteryAlertEnabled = enabled;
         SettingsStore.Save(_settings);
         _flyout.UpdateState(_devices, _settings, AutostartManager.IsEnabled());
+    }
+
+    private static void OpenBatteryLog()
+    {
+        try
+        {
+            string target = File.Exists(BatteryHistoryTracker.LogFilePath)
+                ? BatteryHistoryTracker.LogFilePath
+                : BatteryHistoryTracker.DataDirectory;
+            Directory.CreateDirectory(BatteryHistoryTracker.DataDirectory);
+            Process.Start(new ProcessStartInfo(target) { UseShellExecute = true });
+        }
+        catch
+        {
+            // Ignore shell launch errors.
+        }
     }
 
     private static void OpenTaskbarSettings()

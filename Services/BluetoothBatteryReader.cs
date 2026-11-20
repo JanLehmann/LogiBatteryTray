@@ -115,6 +115,7 @@ public static class BluetoothBatteryReader
                 : string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase);
         });
 
+        BatteryHistoryTracker.LogReadings(combined);
         return combined;
     }
 

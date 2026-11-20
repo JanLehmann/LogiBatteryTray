@@ -283,6 +283,7 @@ internal static class HidppBatteryReader
             {
                 if (TryQueryAdcBattery(
                     fs,
+                    name,
                     features.AdcIdx,
                     caps.InputReportByteLength,
                     caps.OutputReportByteLength,
@@ -543,6 +544,7 @@ internal static class HidppBatteryReader
 
     private static bool TryQueryAdcBattery(
         FileStream fs,
+        string deviceName,
         byte adcFeatureIdx,
         int inLen,
         int outLen,
@@ -585,9 +587,10 @@ internal static class HidppBatteryReader
         bool isCharging = chargingStatus is ChargingStatus.Recharging
             or ChargingStatus.ChargingFinalStage
             or ChargingStatus.ChargingSlow;
-        soc = chargingStatus == ChargingStatus.ChargingComplete
+        int rawPercent = chargingStatus == ChargingStatus.ChargingComplete
             ? 100
             : VoltageToPercent(millivolts, isCharging);
+        soc = BatteryHistoryTracker.ProcessAdcReading(deviceName, millivolts, chargingStatus, rawPercent);
 
         return true;
     }
