@@ -38,14 +38,16 @@ internal static class HidppBatteryReader
         (3500, 0)
     ];
 
-    // While charging, terminal voltage is raised by ~230 mV (charge current x internal resistance),
-    // so the discharge curve would greatly overestimate the state of charge.
+    // While charging in Constant-Current (CC) phase (0% -> ~82%), terminal voltage rises up to ~4330 mV
+    // (~280-300 mV above resting cell voltage). Above ~82%, the charger enters Constant-Voltage (CV) taper,
+    // where current decreases and terminal voltage drops from ~4330 mV back down toward ~4190 mV.
     private static readonly (int Millivolts, int Percent)[] ChargingVoltageCurve =
     [
-        (4210, 99),
-        (4195, 92),
-        (4175, 80),
-        (4140, 65),
+        (4330, 82),
+        (4295, 76),
+        (4245, 70),
+        (4185, 62),
+        (4141, 60),
         (4080, 50),
         (4005, 38),
         (3940, 28),

@@ -73,6 +73,7 @@ public static class BatteryHistoryTracker
                 state.LastReadingUtc = now;
                 state.LastChargingMv = rawMillivolts;
                 state.LastChargingUtc = now;
+                state.PeakChargingMv = null;
                 SaveStoreLocked(store);
                 return 100;
             }
@@ -96,6 +97,7 @@ public static class BatteryHistoryTracker
             // Detect Discharging -> Charging transition: anchor to the true pre-charge percentage
             if (isCharging && state.LastChargingStatus == ChargingStatus.Discharging)
             {
+                state.PeakChargingMv = smoothedMv;
                 if (state.LastDischargingPercent is int preChargePct &&
                     state.LastDischargingUtc is DateTime preChargeUtc &&
                     (now - preChargeUtc).TotalMinutes <= 10)
@@ -103,16 +105,21 @@ public static class BatteryHistoryTracker
                     state.ChargeAnchorPercent = preChargePct;
                     state.ChargeAnchorMv = smoothedMv;
                     state.ChargeAnchorUtc = now;
-                    UpsertLearnedPointLocked(state, smoothedMv, preChargePct, now);
+                    if (preChargePct <= 80 && smoothedMv < 4305)
+                    {
+                        UpsertLearnedPointLocked(state, smoothedMv, preChargePct, now);
+                    }
                 }
             }
 
             // Detect Charging -> Discharging transition: learn resting percentage for the last charging voltage
             if (status == ChargingStatus.Discharging && (wasCharging || state.LastChargingStatus == ChargingStatus.ChargingComplete))
             {
+                int? sessionPeakMv = state.PeakChargingMv;
                 state.ChargeAnchorPercent = null;
                 state.ChargeAnchorMv = null;
                 state.ChargeAnchorUtc = null;
+                state.PeakChargingMv = null;
 
                 if (state.LastChargingStatus == ChargingStatus.ChargingComplete &&
                     rawMillivolts is >= 4080 and <= 4230)
@@ -122,7 +129,9 @@ public static class BatteryHistoryTracker
                 else if (wasCharging &&
                          state.LastChargingMv is int lastChgMv &&
                          state.LastChargingUtc is DateTime lastChgUtc &&
-                         (now - lastChgUtc).TotalMinutes <= 5)
+                         (now - lastChgUtc).TotalMinutes <= 5 &&
+                         rawCurvePercent <= 80 &&
+                         (sessionPeakMv is null || lastChgMv >= sessionPeakMv.Value - 8))
                 {
                     UpsertLearnedPointLocked(state, lastChgMv, rawCurvePercent, now);
                 }
@@ -154,25 +163,55 @@ public static class BatteryHistoryTracker
             }
             else if (isCharging)
             {
-                candidate = ApplyLearnedChargingPoints(state, smoothedMv, candidate);
+                state.PeakChargingMv = Math.Max(state.PeakChargingMv ?? smoothedMv, smoothedMv);
+                int peakMv = state.PeakChargingMv.Value;
+                bool inCvTaper = peakMv >= 4310 && smoothedMv <= peakMv - 8;
+
+                if (inCvTaper)
+                {
+                    // Constant-Voltage (CV) taper phase (~82% -> 99%):
+                    // As charging current tapers off, terminal voltage drops from peak (~4329 mV) down toward ~4190 mV.
+                    int dropSpan = Math.Max(60, peakMv - 4190);
+                    double cvProgress = Math.Clamp((double)(peakMv - smoothedMv) / dropSpan, 0.0, 1.0);
+                    candidate = (int)Math.Round(82 + cvProgress * 17);
+                }
+                else
+                {
+                    candidate = ApplyLearnedChargingPoints(state, smoothedMv, candidate);
+                }
 
                 // If we have an active plug-in anchor from this charging session, interpolate smoothly from it
                 if (state.ChargeAnchorPercent is int anchorPct &&
-                    state.ChargeAnchorMv is int anchorMv &&
                     state.ChargeAnchorUtc is DateTime anchorUtc &&
                     (now - anchorUtc).TotalHours <= 5)
                 {
-                    const int ceilingMv = 4210;
-                    int spanMv = Math.Max(40, ceilingMv - anchorMv);
-                    double progress = Math.Clamp((double)(smoothedMv - anchorMv) / spanMv, 0.0, 1.0);
-                    int anchoredEstimate = (int)Math.Round(anchorPct + progress * (99 - anchorPct));
-
-                    // Blend anchored trajectory with curve estimate
-                    candidate = (int)Math.Round(anchoredEstimate * 0.7 + candidate * 0.3);
-
-                    // Physical charge-rate cap (~1.4% per minute max on USB-C) prevents instant jump on plug-in
                     double elapsedMin = Math.Max(0.0, (now - anchorUtc).TotalMinutes);
-                    int maxAllowedByTime = Math.Min(99, anchorPct + (int)Math.Floor(elapsedMin * 1.4) + 1);
+
+                    // Measured PRO X Wireless charge profile:
+                    // ~0.51%/min during CC phase (up to 82%), tapering to ~0.38%/min during CV phase (82% -> 99%).
+                    double timeEstimate;
+                    if (anchorPct < 82)
+                    {
+                        double minToCv = (82 - anchorPct) / 0.51;
+                        if (elapsedMin <= minToCv)
+                        {
+                            timeEstimate = anchorPct + elapsedMin * 0.51;
+                        }
+                        else
+                        {
+                            timeEstimate = 82.0 + (elapsedMin - minToCv) * 0.38;
+                        }
+                    }
+                    else
+                    {
+                        timeEstimate = anchorPct + elapsedMin * 0.38;
+                    }
+
+                    int timeBasedPct = (int)Math.Round(Math.Clamp(timeEstimate, anchorPct, 99.0));
+                    candidate = (int)Math.Round(timeBasedPct * 0.75 + candidate * 0.25);
+
+                    // Physical charge-rate cap (~0.58% per minute max) prevents racing ahead to 99%
+                    int maxAllowedByTime = Math.Min(99, anchorPct + (int)Math.Floor(elapsedMin * 0.58) + 1);
                     candidate = Math.Clamp(candidate, anchorPct, maxAllowedByTime);
                 }
 
@@ -328,7 +367,7 @@ public static class BatteryHistoryTracker
         int truePercent,
         DateTime nowUtc)
     {
-        if (chargingMv is < 3550 or > 4250 || truePercent is < 0 or > 100)
+        if (chargingMv is < 3550 or > 4340 || truePercent is < 0 or > 100)
         {
             return;
         }
@@ -450,6 +489,7 @@ public static class BatteryHistoryTracker
         public int? ChargeAnchorPercent { get; set; }
         public int? ChargeAnchorMv { get; set; }
         public DateTime? ChargeAnchorUtc { get; set; }
+        public int? PeakChargingMv { get; set; }
 
         public List<LearnedVoltagePoint> LearnedChargingPoints { get; set; } = [];
     }
