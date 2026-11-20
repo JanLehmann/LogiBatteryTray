@@ -366,7 +366,7 @@ public sealed class BatteryFlyoutForm : Form
         SuspendLayout();
 
         int pad = S(16);
-        int width = S(340);
+        int width = S(364);
         int contentWidth = width - (pad * 2);
 
         _titleLabel.Font = _titleFont;
@@ -607,17 +607,27 @@ public sealed class BatteryFlyoutForm : Form
                 g.DrawString(_device.Name, nameFont, nameBrush, new RectangleF(textLeft, 10f * scale, textMaxW, 20f * scale), sf);
             }
 
+            string estimatePart = !string.IsNullOrEmpty(_device.EstimatedTimeText)
+                ? $" · {_device.EstimatedTimeText}"
+                : string.Empty;
             string voltagePart = _device.BatteryMillivolts is int mv && mv > 0
                 ? $" · {mv} mV ({mv / 1000.0:0.00} V)"
                 : string.Empty;
-            string timePart = _device.LastUpdated is DateTime dt
+            string timePart = voltagePart.Length == 0 && _device.LastUpdated is DateTime dt
                 ? $" · Stand {dt:HH:mm}"
                 : string.Empty;
             string statusBase = ChargingStatusText.ToDetailedStatus(_device.ChargingStatus, _device.IsConnected);
             Color statusColor = _device.IsCharging || _device.IsChargingComplete ? accentColor : _textSecondary;
             using (var statusBrush = new SolidBrush(statusColor))
+            using (var statusSf = new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
             {
-                g.DrawString(statusBase + voltagePart + timePart, statusFont, statusBrush, textLeft, 29f * scale);
+                float statusMaxW = Math.Max(60f, Width - textLeft - pad);
+                g.DrawString(
+                    statusBase + estimatePart + voltagePart + timePart,
+                    statusFont,
+                    statusBrush,
+                    new RectangleF(textLeft, 29f * scale, statusMaxW, 18f * scale),
+                    statusSf);
             }
 
             float barY = Height - 38f * scale;

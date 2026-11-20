@@ -350,6 +350,7 @@ public sealed class TrayApplicationContext : ApplicationContext
             {
                 string label;
                 string mvSuffix = dev.BatteryMillivolts is int mv && mv > 0 ? $" · {mv} mV" : string.Empty;
+                string estSuffix = !string.IsNullOrEmpty(dev.EstimatedTimeText) ? $" · {dev.EstimatedTimeText}" : string.Empty;
                 if (!dev.IsConnected || dev.BatteryPercent is not int p)
                 {
                     label = $"{dev.Name} — Getrennt{mvSuffix}";
@@ -360,11 +361,11 @@ public sealed class TrayApplicationContext : ApplicationContext
                              or ChargingStatus.OtherError)
                 {
                     string status = ChargingStatusText.ToShortStatus(dev.ChargingStatus, dev.IsConnected);
-                    label = $"{dev.Name} — {p} %{mvSuffix} ({status})";
+                    label = $"{dev.Name} — {p} %{mvSuffix}{estSuffix} ({status})";
                 }
                 else
                 {
-                    label = $"{dev.Name} — {p} %{mvSuffix}";
+                    label = $"{dev.Name} — {p} %{mvSuffix}{estSuffix}";
                 }
 
                 bool visible = _settings.IsDeviceVisible(dev);
@@ -583,12 +584,16 @@ public sealed class TrayApplicationContext : ApplicationContext
     {
         string status = ChargingStatusText.ToShortStatus(dev.ChargingStatus, dev.IsConnected);
         string mvPart = dev.BatteryMillivolts is int mv && mv > 0 ? $" · {mv} mV" : string.Empty;
-        string displayName = mvPart.Length > 0 ? ShortenForCombinedTooltip(dev.Name) : dev.Name;
+        string displayName = ShortenForCombinedTooltip(dev.Name);
         string state = dev.IsConnected && dev.BatteryPercent is int p
             ? $"{p} %{mvPart} ({status})"
             : $"Getrennt{mvPart}";
-        string time = dev.LastUpdated is DateTime dt ? $"\nStand: {dt:HH:mm}" : string.Empty;
-        return TruncateTooltip($"{displayName}: {state}{time}");
+        string secondLine = !string.IsNullOrEmpty(dev.EstimatedTimeText)
+            ? $"\n{dev.EstimatedTimeText}"
+            : dev.LastUpdated is DateTime dt
+                ? $"\nStand: {dt:HH:mm}"
+                : string.Empty;
+        return TruncateTooltip($"{displayName}: {state}{secondLine}");
     }
 
     private static string BuildCombinedTooltip(IReadOnlyList<DeviceBatteryInfo> devices)

@@ -63,7 +63,8 @@ internal static class Program
             string pct = dev.BatteryPercent is int p ? $"{p}%" : "null";
             string ts = dev.LastUpdated is DateTime dt ? dt.ToString("yyyy-MM-dd HH:mm:ss") : "null";
             string mv = dev.BatteryMillivolts is int v && v > 0 ? $" | Voltage={v}mV" : string.Empty;
-            Console.WriteLine($"{dev.Name} | Kind={dev.Kind} | Battery={pct}{mv} | Connected={dev.IsConnected} | Charging={dev.ChargingStatus} | Updated={ts} | Id={dev.InstanceId}");
+            string est = !string.IsNullOrEmpty(dev.EstimatedTimeText) ? $" | Remaining={dev.EstimatedTimeText}" : string.Empty;
+            Console.WriteLine($"{dev.Name} | Kind={dev.Kind} | Battery={pct}{mv}{est} | Connected={dev.IsConnected} | Charging={dev.ChargingStatus} | Updated={ts} | Id={dev.InstanceId}");
         }
     }
 
