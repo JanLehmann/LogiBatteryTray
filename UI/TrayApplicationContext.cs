@@ -25,8 +25,10 @@ public sealed class TrayApplicationContext : ApplicationContext
     private readonly WinFormsTimer _pollTimer;
     private readonly WinFormsTimer _debounceTimer;
     private readonly WinFormsTimer _resumeTimer;
+    private readonly WinFormsTimer _cycleTimer;
 
     private IReadOnlyList<DeviceBatteryInfo> _devices = [];
+    private int _cycleIndex;
     private bool _refreshInFlight;
     private bool _disposed;
 
@@ -43,6 +45,7 @@ public sealed class TrayApplicationContext : ApplicationContext
         _flyout = new BatteryFlyoutForm();
         _flyout.RefreshRequested += (_, _) => _ = RefreshDevicesAsync();
         _flyout.IconModeSelected += (_, mode) => SetIconMode(mode);
+        _flyout.DeviceVisibilityChanged += (_, args) => SetDeviceVisibility(args.Device, args.Visible);
         _flyout.AutostartChanged += (_, enabled) => SetAutostart(enabled);
         _flyout.LowBatteryAlertChanged += (_, enabled) => SetLowBatteryAlert(enabled);
         _flyout.OpenTaskbarSettingsRequested += (_, _) => OpenTaskbarSettings();
@@ -67,6 +70,12 @@ public sealed class TrayApplicationContext : ApplicationContext
             _resumeTimer.Stop();
             _ = RefreshDevicesAsync();
         };
+
+        _cycleTimer = new WinFormsTimer
+        {
+            Interval = Math.Clamp(_settings.CycleIntervalMs, 1500, 30000)
+        };
+        _cycleTimer.Tick += (_, _) => OnCycleTimerTick();
 
         _messageWindow = new MessageListenerWindow(
             showFlyoutMessage,
@@ -111,6 +120,8 @@ public sealed class TrayApplicationContext : ApplicationContext
             _debounceTimer.Dispose();
             _resumeTimer.Stop();
             _resumeTimer.Dispose();
+            _cycleTimer.Stop();
+            _cycleTimer.Dispose();
 
             ClearAllTrayIcons();
             _contextMenu.Dispose();
@@ -164,24 +175,59 @@ public sealed class TrayApplicationContext : ApplicationContext
 
         int iconSize = ThemeHelper.GetTrayIconSize();
         bool isLightTaskbar = ThemeHelper.IsSystemLightTheme();
+        List<DeviceBatteryInfo> visibleDevices = GetVisibleDevices();
 
-        if (_settings.IconMode == IconDisplayMode.Combined || _devices.Count == 0)
+        if (visibleDevices.Count == 0)
         {
+            _cycleTimer.Stop();
             EnsureTrayIconCount(1);
             NotifyIcon tray = _trayIcons[0];
-            Icon newIcon = _devices.Count == 0
-                ? TrayIconRenderer.RenderEmptyIcon(iconSize, isLightTaskbar)
-                : TrayIconRenderer.RenderCombinedIcon(_devices, iconSize, isLightTaskbar);
+            Icon newIcon = TrayIconRenderer.RenderEmptyIcon(iconSize, isLightTaskbar);
+            ReplaceIcon(tray, newIcon);
+            tray.Text = _devices.Count > 0
+                ? "Logitech Akku: Alle Geräte ausgeblendet\nKlick für Übersicht"
+                : "Logitech Akku: Keine Geräte gefunden";
+            tray.Visible = true;
+        }
+        else if (_settings.IconMode == IconDisplayMode.Combined)
+        {
+            _cycleTimer.Stop();
+            EnsureTrayIconCount(1);
+            NotifyIcon tray = _trayIcons[0];
+            Icon newIcon = TrayIconRenderer.RenderCombinedIcon(visibleDevices, iconSize, isLightTaskbar);
             ReplaceIcon(tray, newIcon);
             tray.Text = BuildCombinedTooltip(_devices);
             tray.Visible = true;
         }
+        else if (_settings.IconMode == IconDisplayMode.Cycling)
+        {
+            EnsureTrayIconCount(1);
+            _cycleIndex %= visibleDevices.Count;
+            NotifyIcon tray = _trayIcons[0];
+            Icon newIcon = TrayIconRenderer.RenderDeviceIcon(visibleDevices[_cycleIndex], iconSize, isLightTaskbar);
+            ReplaceIcon(tray, newIcon);
+            tray.Text = BuildCombinedTooltip(_devices);
+            tray.Visible = true;
+
+            if (visibleDevices.Count > 1)
+            {
+                if (!_cycleTimer.Enabled)
+                {
+                    _cycleTimer.Start();
+                }
+            }
+            else
+            {
+                _cycleTimer.Stop();
+            }
+        }
         else
         {
-            EnsureTrayIconCount(_devices.Count);
-            for (int i = 0; i < _devices.Count; i++)
+            _cycleTimer.Stop();
+            EnsureTrayIconCount(visibleDevices.Count);
+            for (int i = 0; i < visibleDevices.Count; i++)
             {
-                DeviceBatteryInfo dev = _devices[i];
+                DeviceBatteryInfo dev = visibleDevices[i];
                 NotifyIcon tray = _trayIcons[i];
                 Icon newIcon = _settings.IconMode == IconDisplayMode.NumbersOnly
                     ? TrayIconRenderer.RenderDeviceNumbersOnlyIcon(dev, iconSize, isLightTaskbar)
@@ -191,6 +237,33 @@ public sealed class TrayApplicationContext : ApplicationContext
                 tray.Visible = true;
             }
         }
+    }
+
+    private void OnCycleTimerTick()
+    {
+        if (_disposed || _settings.IconMode != IconDisplayMode.Cycling)
+        {
+            _cycleTimer.Stop();
+            return;
+        }
+
+        List<DeviceBatteryInfo> visibleDevices = GetVisibleDevices();
+        if (visibleDevices.Count <= 1 || _trayIcons.Count == 0)
+        {
+            _cycleTimer.Stop();
+            return;
+        }
+
+        _cycleIndex = (_cycleIndex + 1) % visibleDevices.Count;
+        int iconSize = ThemeHelper.GetTrayIconSize();
+        bool isLightTaskbar = ThemeHelper.IsSystemLightTheme();
+        Icon newIcon = TrayIconRenderer.RenderDeviceIcon(visibleDevices[_cycleIndex], iconSize, isLightTaskbar);
+        ReplaceIcon(_trayIcons[0], newIcon);
+    }
+
+    private List<DeviceBatteryInfo> GetVisibleDevices()
+    {
+        return _devices.Where(d => _settings.IsDeviceVisible(d)).ToList();
     }
 
     private void EnsureTrayIconCount(int desiredCount)
@@ -293,7 +366,14 @@ public sealed class TrayApplicationContext : ApplicationContext
                     label = $"{dev.Name} — {p} %";
                 }
 
-                _contextMenu.Items.Add(new ToolStripMenuItem(label) { Enabled = false });
+                bool visible = _settings.IsDeviceVisible(dev);
+                var item = new ToolStripMenuItem(label)
+                {
+                    Checked = visible
+                };
+                DeviceBatteryInfo captured = dev;
+                item.Click += (_, _) => SetDeviceVisibility(captured, !visible);
+                _contextMenu.Items.Add(item);
             }
         }
 
@@ -301,19 +381,25 @@ public sealed class TrayApplicationContext : ApplicationContext
         _contextMenu.Items.Add("Jetzt aktualisieren", null, (_, _) => _ = RefreshDevicesAsync());
 
         var modeMenu = new ToolStripMenuItem("Darstellung");
-        var splitItem = new ToolStripMenuItem("Zwei Symbole (mit Icon)")
+        var splitItem = new ToolStripMenuItem("Pro Gerät (mit Icon)")
         {
             Checked = _settings.IconMode == IconDisplayMode.Split
         };
         splitItem.Click += (_, _) => SetIconMode(IconDisplayMode.Split);
 
-        var numbersItem = new ToolStripMenuItem("Zwei Symbole (nur Prozent)")
+        var numbersItem = new ToolStripMenuItem("Pro Gerät (nur Prozent)")
         {
             Checked = _settings.IconMode == IconDisplayMode.NumbersOnly
         };
         numbersItem.Click += (_, _) => SetIconMode(IconDisplayMode.NumbersOnly);
 
-        var combinedItem = new ToolStripMenuItem("Ein Symbol (kombiniert)")
+        var cyclingItem = new ToolStripMenuItem("1 Symbol (automatischer Wechsel)")
+        {
+            Checked = _settings.IconMode == IconDisplayMode.Cycling
+        };
+        cyclingItem.Click += (_, _) => SetIconMode(IconDisplayMode.Cycling);
+
+        var combinedItem = new ToolStripMenuItem("1 Symbol (kombiniert)")
         {
             Checked = _settings.IconMode == IconDisplayMode.Combined
         };
@@ -321,6 +407,7 @@ public sealed class TrayApplicationContext : ApplicationContext
 
         modeMenu.DropDownItems.Add(splitItem);
         modeMenu.DropDownItems.Add(numbersItem);
+        modeMenu.DropDownItems.Add(cyclingItem);
         modeMenu.DropDownItems.Add(combinedItem);
         _contextMenu.Items.Add(modeMenu);
 
@@ -354,6 +441,17 @@ public sealed class TrayApplicationContext : ApplicationContext
         SettingsStore.Save(_settings);
         RebuildTrayIconsOnly();
         _flyout.UpdateState(_devices, _settings, AutostartManager.IsEnabled());
+    }
+
+    private void SetDeviceVisibility(DeviceBatteryInfo device, bool visible)
+    {
+        _settings.SetDeviceVisible(device, visible);
+        SettingsStore.Save(_settings);
+        RebuildTrayIconsOnly();
+        if (!_flyout.Visible)
+        {
+            _flyout.UpdateState(_devices, _settings, AutostartManager.IsEnabled());
+        }
     }
 
     private void SetAutostart(bool enabled)

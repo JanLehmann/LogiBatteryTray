@@ -19,6 +19,7 @@ public sealed class BatteryFlyoutForm : Form
     private readonly Label _modeLabel;
     private readonly Button _modeSplitButton;
     private readonly Button _modeNumbersButton;
+    private readonly Button _modeCyclingButton;
     private readonly Button _modeCombinedButton;
     private readonly CheckBox _autostartCheckBox;
     private readonly CheckBox _alertCheckBox;
@@ -49,6 +50,7 @@ public sealed class BatteryFlyoutForm : Form
 
     public event EventHandler? RefreshRequested;
     public event EventHandler<IconDisplayMode>? IconModeSelected;
+    public event EventHandler<(DeviceBatteryInfo Device, bool Visible)>? DeviceVisibilityChanged;
     public event EventHandler<bool>? AutostartChanged;
     public event EventHandler<bool>? LowBatteryAlertChanged;
     public event EventHandler? OpenTaskbarSettingsRequested;
@@ -95,7 +97,8 @@ public sealed class BatteryFlyoutForm : Form
 
         _modeSplitButton = CreateModeButton("Mit Icon", IconDisplayMode.Split);
         _modeNumbersButton = CreateModeButton("Nur Prozent", IconDisplayMode.NumbersOnly);
-        _modeCombinedButton = CreateModeButton("1 Symbol", IconDisplayMode.Combined);
+        _modeCyclingButton = CreateModeButton("1 Symbol (Wechsel)", IconDisplayMode.Cycling);
+        _modeCombinedButton = CreateModeButton("1 Symbol (Kombi)", IconDisplayMode.Combined);
 
         _autostartCheckBox = new CheckBox
         {
@@ -155,6 +158,7 @@ public sealed class BatteryFlyoutForm : Form
             _modeLabel,
             _modeSplitButton,
             _modeNumbersButton,
+            _modeCyclingButton,
             _modeCombinedButton,
             _autostartCheckBox,
             _alertCheckBox,
@@ -310,6 +314,7 @@ public sealed class BatteryFlyoutForm : Form
     {
         StyleModeButton(_modeSplitButton, _settings.IconMode == IconDisplayMode.Split);
         StyleModeButton(_modeNumbersButton, _settings.IconMode == IconDisplayMode.NumbersOnly);
+        StyleModeButton(_modeCyclingButton, _settings.IconMode == IconDisplayMode.Cycling);
         StyleModeButton(_modeCombinedButton, _settings.IconMode == IconDisplayMode.Combined);
     }
 
@@ -399,17 +404,22 @@ public sealed class BatteryFlyoutForm : Form
         {
             for (int i = 0; i < _devices.Count; i++)
             {
+                DeviceBatteryInfo dev = _devices[i];
+                bool isVisible = _settings.IsDeviceVisible(dev);
                 var card = new DeviceCardControl(
-                    _devices[i],
+                    dev,
+                    isVisible,
+                    visible => DeviceVisibilityChanged?.Invoke(this, (dev, visible)),
                     _isLightTheme,
                     _cardColor,
                     _cardBorderColor,
                     _textPrimary,
                     _textSecondary,
-                    _trackColor)
+                    _trackColor,
+                    _linkFont)
                 {
                     Location = new Point(0, cardY),
-                    Size = new Size(contentWidth, S(74))
+                    Size = new Size(contentWidth, S(94))
                 };
                 _cardsHost.Controls.Add(card);
                 cardY += card.Height + (i < _devices.Count - 1 ? cardGap : 0);
@@ -430,21 +440,27 @@ public sealed class BatteryFlyoutForm : Form
         y += S(20);
 
         int gap = S(6);
-        int btnW = (contentWidth - (gap * 2)) / 3;
-        int lastW = contentWidth - ((btnW + gap) * 2);
+        int colW = (contentWidth - gap) / 2;
+        int col2W = contentWidth - colW - gap;
         int btnH = S(28);
 
         _modeSplitButton.Font = _buttonFont;
         _modeSplitButton.Location = new Point(pad, y);
-        _modeSplitButton.Size = new Size(btnW, btnH);
+        _modeSplitButton.Size = new Size(colW, btnH);
 
         _modeNumbersButton.Font = _buttonFont;
-        _modeNumbersButton.Location = new Point(pad + btnW + gap, y);
-        _modeNumbersButton.Size = new Size(btnW, btnH);
+        _modeNumbersButton.Location = new Point(pad + colW + gap, y);
+        _modeNumbersButton.Size = new Size(col2W, btnH);
+
+        y += btnH + gap;
+
+        _modeCyclingButton.Font = _buttonFont;
+        _modeCyclingButton.Location = new Point(pad, y);
+        _modeCyclingButton.Size = new Size(colW, btnH);
 
         _modeCombinedButton.Font = _buttonFont;
-        _modeCombinedButton.Location = new Point(pad + ((btnW + gap) * 2), y);
-        _modeCombinedButton.Size = new Size(lastW, btnH);
+        _modeCombinedButton.Location = new Point(pad + colW + gap, y);
+        _modeCombinedButton.Size = new Size(col2W, btnH);
 
         StyleModeButtons();
         y += btnH + S(10);
@@ -491,15 +507,19 @@ public sealed class BatteryFlyoutForm : Form
         private readonly Color _textPrimary;
         private readonly Color _textSecondary;
         private readonly Color _trackColor;
+        private readonly CheckBox _visibleCheckBox;
 
         public DeviceCardControl(
             DeviceBatteryInfo device,
+            bool isVisibleInTray,
+            Action<bool> onVisibilityChanged,
             bool isLight,
             Color cardColor,
             Color borderColor,
             Color textPrimary,
             Color textSecondary,
-            Color trackColor)
+            Color trackColor,
+            Font checkBoxFont)
         {
             _device = device;
             _isLight = isLight;
@@ -509,6 +529,22 @@ public sealed class BatteryFlyoutForm : Form
             _textSecondary = textSecondary;
             _trackColor = trackColor;
             DoubleBuffered = true;
+
+            float scale = Math.Max(96, DeviceDpi) / 96f;
+            _visibleCheckBox = new CheckBox
+            {
+                Text = "Im Tray anzeigen",
+                Checked = isVisibleInTray,
+                AutoSize = true,
+                BackColor = cardColor,
+                ForeColor = textSecondary,
+                Font = checkBoxFont,
+                Cursor = Cursors.Hand,
+                TabStop = false,
+                Location = new Point((int)Math.Round(12f * scale), (int)Math.Round(67f * scale))
+            };
+            _visibleCheckBox.CheckedChanged += (_, _) => onVisibilityChanged(_visibleCheckBox.Checked);
+            Controls.Add(_visibleCheckBox);
         }
 
         protected override void OnPaint(PaintEventArgs e)
@@ -581,7 +617,7 @@ public sealed class BatteryFlyoutForm : Form
                 g.DrawString(statusBase + timePart, statusFont, statusBrush, textLeft, 29f * scale);
             }
 
-            float barY = Height - 15f * scale;
+            float barY = Height - 38f * scale;
             float barH = 6f * scale;
             float barW = Width - (pad * 2);
             using (GraphicsPath trackPath = TrayIconRenderer.CreateRoundedRect(new RectangleF(pad, barY, barW, barH), barH / 2f))
