@@ -21,7 +21,7 @@ internal static class HidppBatteryReader
     private const string BleHidServiceToken = "{00001812-0000-1000-8000-00805f9b34fb}";
 
     // Standard Logitech LiPo discharge curve (mV -> %) used with HID++ feature 0x1F20.
-    private static readonly (int Millivolts, int Percent)[] VoltageCurve =
+    private static readonly (int Millivolts, int Percent)[] DischargingVoltageCurve =
     [
         (4186, 100),
         (4067, 90),
@@ -36,6 +36,23 @@ internal static class HidppBatteryReader
         (3646, 5),
         (3579, 2),
         (3500, 0)
+    ];
+
+    // While charging, terminal voltage is raised by ~230 mV (charge current x internal resistance),
+    // so the discharge curve would greatly overestimate the state of charge.
+    private static readonly (int Millivolts, int Percent)[] ChargingVoltageCurve =
+    [
+        (4210, 99),
+        (4195, 92),
+        (4175, 80),
+        (4140, 65),
+        (4080, 50),
+        (4005, 38),
+        (3940, 28),
+        (3870, 18),
+        (3790, 10),
+        (3700, 2),
+        (3600, 0)
     ];
 
     private static readonly ConcurrentDictionary<string, byte> BleUnifiedBatteryCache =
@@ -554,9 +571,12 @@ internal static class HidppBatteryReader
         }
 
         chargingStatus = MapAdcFlags(resp[6]);
+        bool isCharging = chargingStatus is ChargingStatus.Recharging
+            or ChargingStatus.ChargingFinalStage
+            or ChargingStatus.ChargingSlow;
         soc = chargingStatus == ChargingStatus.ChargingComplete
             ? 100
-            : VoltageToPercent(millivolts);
+            : VoltageToPercent(millivolts, isCharging);
 
         return true;
     }
@@ -576,17 +596,18 @@ internal static class HidppBatteryReader
         };
     }
 
-    private static int VoltageToPercent(int millivolts)
+    private static int VoltageToPercent(int millivolts, bool isCharging)
     {
-        if (millivolts >= VoltageCurve[0].Millivolts)
+        (int Millivolts, int Percent)[] curve = isCharging ? ChargingVoltageCurve : DischargingVoltageCurve;
+        if (millivolts >= curve[0].Millivolts)
         {
-            return 100;
+            return curve[0].Percent;
         }
 
-        for (int i = 0; i < VoltageCurve.Length - 1; i++)
+        for (int i = 0; i < curve.Length - 1; i++)
         {
-            (int highMv, int highPct) = VoltageCurve[i];
-            (int lowMv, int lowPct) = VoltageCurve[i + 1];
+            (int highMv, int highPct) = curve[i];
+            (int lowMv, int lowPct) = curve[i + 1];
             if (millivolts >= lowMv)
             {
                 double fraction = (double)(millivolts - lowMv) / (highMv - lowMv);
