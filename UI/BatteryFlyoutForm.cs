@@ -607,6 +607,9 @@ public sealed class BatteryFlyoutForm : Form
                 g.DrawString(_device.Name, nameFont, nameBrush, new RectangleF(textLeft, 10f * scale, textMaxW, 20f * scale), sf);
             }
 
+            string voltagePart = _device.BatteryMillivolts is int mv && mv > 0
+                ? $" · {mv} mV ({mv / 1000.0:0.00} V)"
+                : string.Empty;
             string timePart = _device.LastUpdated is DateTime dt
                 ? $" · Stand {dt:HH:mm}"
                 : string.Empty;
@@ -614,7 +617,7 @@ public sealed class BatteryFlyoutForm : Form
             Color statusColor = _device.IsCharging || _device.IsChargingComplete ? accentColor : _textSecondary;
             using (var statusBrush = new SolidBrush(statusColor))
             {
-                g.DrawString(statusBase + timePart, statusFont, statusBrush, textLeft, 29f * scale);
+                g.DrawString(statusBase + voltagePart + timePart, statusFont, statusBrush, textLeft, 29f * scale);
             }
 
             float barY = Height - 38f * scale;

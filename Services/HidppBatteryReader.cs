@@ -71,7 +71,8 @@ internal static class HidppBatteryReader
         DeviceKind Kind,
         bool ResolvedFromHidppName,
         int? LastPercent,
-        DateTime? LastUpdated);
+        DateTime? LastUpdated,
+        int? LastMillivolts = null);
 
     internal static IReadOnlyList<DeviceBatteryInfo> EnrichDevices(IReadOnlyList<DeviceBatteryInfo> devices)
     {
@@ -231,7 +232,8 @@ internal static class HidppBatteryReader
                         kind,
                         ResolvedFromHidppName: true,
                         cached?.LastPercent,
-                        cached?.LastUpdated);
+                        cached?.LastUpdated,
+                        cached?.LastMillivolts);
                     UsbDeviceStateCache[path] = cached;
                 }
             }
@@ -245,12 +247,14 @@ internal static class HidppBatteryReader
                     kind,
                     ResolvedFromHidppName: false,
                     cached?.LastPercent,
-                    cached?.LastUpdated);
+                    cached?.LastUpdated,
+                    cached?.LastMillivolts);
                 UsbDeviceStateCache[path] = cached;
             }
 
             bool isConnected = false;
             int? batteryPercent = cached?.LastPercent;
+            int? batteryMillivolts = cached?.LastMillivolts;
             DateTime? lastUpdated = cached?.LastUpdated;
             ChargingStatus chargingStatus = ChargingStatus.Unknown;
 
@@ -283,11 +287,13 @@ internal static class HidppBatteryReader
                     caps.InputReportByteLength,
                     caps.OutputReportByteLength,
                     out int? soc,
+                    out int? mv,
                     out ChargingStatus status,
                     out bool featureInvalid))
                 {
                     isConnected = true;
                     batteryPercent = soc ?? batteryPercent;
+                    batteryMillivolts = mv ?? batteryMillivolts;
                     chargingStatus = status;
                     lastUpdated = DateTime.Now;
                 }
@@ -304,7 +310,8 @@ internal static class HidppBatteryReader
                     kind,
                     cached?.ResolvedFromHidppName ?? false,
                     batteryPercent,
-                    lastUpdated);
+                    lastUpdated,
+                    batteryMillivolts);
             }
 
             return new DeviceBatteryInfo(
@@ -315,7 +322,8 @@ internal static class HidppBatteryReader
                 isConnected,
                 lastUpdated,
                 BluetoothAddress: null,
-                ChargingStatus: chargingStatus);
+                ChargingStatus: chargingStatus,
+                BatteryMillivolts: batteryMillivolts);
         }
         catch
         {
@@ -539,10 +547,12 @@ internal static class HidppBatteryReader
         int inLen,
         int outLen,
         out int? soc,
+        out int? millivoltsOut,
         out ChargingStatus chargingStatus,
         out bool featureInvalid)
     {
         soc = null;
+        millivoltsOut = null;
         chargingStatus = ChargingStatus.Unknown;
         featureInvalid = false;
 
@@ -570,6 +580,7 @@ internal static class HidppBatteryReader
             return false;
         }
 
+        millivoltsOut = millivolts;
         chargingStatus = MapAdcFlags(resp[6]);
         bool isCharging = chargingStatus is ChargingStatus.Recharging
             or ChargingStatus.ChargingFinalStage

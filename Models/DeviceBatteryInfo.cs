@@ -11,7 +11,8 @@ public sealed record DeviceBatteryInfo(
     bool IsConnected,
     DateTime? LastUpdated,
     string? BluetoothAddress,
-    ChargingStatus ChargingStatus = ChargingStatus.Unknown)
+    ChargingStatus ChargingStatus = ChargingStatus.Unknown,
+    int? BatteryMillivolts = null)
 {
     public bool IsCharging =>
         IsConnected &&
